@@ -611,6 +611,13 @@ class PowerLineDecoration(_Decoration):
             None,
             "Force background colour for the next part of the decoration.",
         ),
+        ("fill", True, "Whether to fill the path or not"),
+        ("line_width", 2, "Width of stroke line"),
+        ("line_cap", "butt", "Stroke line cap"),
+        ("line_join", "miter", "Stroke line join"),
+        ("stroke", False, "Whether to stroke the path or not"),
+        ("override_stroke_colour", None, "Force stroke colour"),
+        ("right", None, "Force whether the shape's color is connected to the right or the left"),
     ]
 
     _screenshots = [
@@ -629,9 +636,9 @@ class PowerLineDecoration(_Decoration):
     # Pre-defined paths
     paths = {
         "arrow_left": [(0, 0), (1, 0.5), (0, 1)],
-        "arrow_right": [(0, 0), (1, 0), (0, 0.5), (1, 1), (0, 1)],
+        "arrow_right": [(1, 0), (0, 0.5), (1, 1)],
         "forward_slash": [(0, 0), (1, 0), (0, 1)],
-        "back_slash": [(0, 0), (1, 1), (0, 1)],
+        "back_slash": [(1, 0), (0, 0), (1, 1)],
         "zig_zag": [(0, 0), (1, 0.2), (0, 0.4), (1, 0.6), (0, 0.8), (1, 1), (0, 1)],
     }
 
@@ -640,6 +647,11 @@ class PowerLineDecoration(_Decoration):
         self.add_defaults(PowerLineDecoration.defaults)
         self.shift = max(min(self.shift, self.size), 0)
         self._extrawidth += self.size - self.shift
+
+        if not self.stroke:
+            self.line_width = 0
+        self._extrawidth += self.line_width
+        self.extrawidth += self.line_width
 
     @property
     def parent_length(self):
@@ -659,7 +671,13 @@ class PowerLineDecoration(_Decoration):
             if callable(shape_path):
                 self.draw_func = shape_path
             elif isinstance(shape_path, list):
-                self.draw_func = partial(self.draw_path, path=shape_path)
+                self.draw_func = partial(
+                    self.draw_path,
+                    path=shape_path,
+                    right=self.right
+                    if self.right is not None
+                    else (self.path in ["arrow_right", "back_slash"]),
+                )
             else:
                 raise ConfigError(f"Unknown `path` ({self.path}) for PowerLineDecoration.")
         elif isinstance(self.path, list):
@@ -671,6 +689,22 @@ class PowerLineDecoration(_Decoration):
             self.override_colour or self.parent.background or self.parent.bar.background
         )
         self.next_background = self.override_next_colour or self.set_next_colour()
+        self.parent_foreground = self.override_stroke_colour or self.parent.foreground
+
+        line_caps = {
+            "butt": cairocffi.LINE_CAP_BUTT,
+            "round": cairocffi.LINE_CAP_ROUND,
+            "square": cairocffi.LINE_CAP_SQUARE,
+        }
+        line_joins = {
+            "miter": cairocffi.LINE_JOIN_MITER,
+            "round": cairocffi.LINE_JOIN_ROUND,
+            "bevel": cairocffi.LINE_JOIN_BEVEL,
+        }
+        if self.line_cap in line_caps:
+            self.line_cap = line_caps[self.line_cap]
+        if self.line_join in line_joins:
+            self.line_join = line_joins[self.line_join]
 
     def set_next_colour(self):
         try:
@@ -766,14 +800,14 @@ class PowerLineDecoration(_Decoration):
         self.ctx.fill()
         self.ctx.restore()
 
-    def draw_path(self, path=list()):
+    def draw_path(self, path=list(), right=False):
         if not path:
             return
 
         path = path.copy()
 
-        self.fg = self.parent_background
-        self.bg = self.next_background
+        self.fg = self.parent_background if not right else self.next_background
+        self.bg = self.next_background if not right else self.parent_background
 
         self.paint_background(self.bg)
 
@@ -783,7 +817,10 @@ class PowerLineDecoration(_Decoration):
         self.ctx.save()
         self.ctx.set_operator(cairocffi.OPERATOR_SOURCE)
 
-        self.ctx.translate(self.parent_length - self.shift + self.extrawidth, self.padding_y)
+        self.ctx.translate(
+            self.parent_length - self.shift + self.extrawidth - self.line_width // 2,
+            self.padding_y,
+        )
 
         x, y = path.pop(0)
         self.ctx.move_to(x * width, y * height)
@@ -791,9 +828,18 @@ class PowerLineDecoration(_Decoration):
         for x, y in path:
             self.ctx.line_to(x * width, y * height)
 
+        if self.stroke:
+            self.set_source_rgb(self.parent_foreground)
+            self.ctx.set_line_width(self.line_width)
+            self.ctx.set_line_join(self.line_join)
+            self.ctx.set_line_cap(self.line_cap)
+            self.ctx.stroke()
+
         self.ctx.close_path()
-        self.set_source_rgb(self.fg)
-        self.ctx.fill()
+
+        if self.fill:
+            self.set_source_rgb(self.fg)
+            self.ctx.fill()
         self.ctx.restore()
 
     def draw(self):
